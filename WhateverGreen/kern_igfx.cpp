@@ -177,6 +177,27 @@ void IGFX::processKernel(KernelPatcher &patcher, DeviceInfo *info) {
 	} else if (info->videoBuiltin) {
 		applyFramebufferPatch = loadPatchesFromDevice(info->videoBuiltin, info->reportedFramebufferId);
 
+		// Boot argument and device property overrides for EU/slice count.
+		// These work independently of framebuffer-patch-enable.
+		{
+			uint32_t euCount = 0;
+			if (PE_parse_boot_argn("igfxeucount", &euCount, sizeof(euCount)) ||
+				WIOKit::getOSDataValue(info->videoBuiltin, "igfx-eu-count", euCount)) {
+				framebufferPatch.fEuCount = euCount;
+				framebufferPatchFlags.bits.FPFEuCount = 1;
+				applyFramebufferPatch = true;
+				DBGLOG("igfx", "EU count override set to %u", euCount);
+			}
+			uint32_t sliceCount = 0;
+			if (PE_parse_boot_argn("igfxslicecount", &sliceCount, sizeof(sliceCount)) ||
+				WIOKit::getOSDataValue(info->videoBuiltin, "igfx-slice-count", sliceCount)) {
+				framebufferPatch.fSliceCount = sliceCount;
+				framebufferPatchFlags.bits.FPFSliceCount = 1;
+				applyFramebufferPatch = true;
+				DBGLOG("igfx", "Slice count override set to %u", sliceCount);
+			}
+		}
+
 #ifdef DEBUG
 		dumpFramebufferToDisk = checkKernelArgument("-igfxdump");
 		dumpPlatformTable = checkKernelArgument("-igfxfbdump");
@@ -1479,6 +1500,8 @@ bool IGFX::loadPatchesFromDevice(IORegistryEntry *igpu, uint32_t currentFramebuf
 			framebufferPatchFlags.bits.FPFFramebufferMemorySize = WIOKit::getOSDataValue(igpu, "framebuffer-fbmem", framebufferPatch.fFramebufferMemorySize);
 			framebufferPatchFlags.bits.FPFUnifiedMemorySize = WIOKit::getOSDataValue(igpu, "framebuffer-unifiedmem", framebufferPatch.fUnifiedMemorySize);
 			framebufferPatchFlags.bits.FPFFramebufferCursorSize = WIOKit::getOSDataValue(igpu, "framebuffer-cursormem", fPatchCursorMemorySize);
+			framebufferPatchFlags.bits.FPFSliceCount = WIOKit::getOSDataValue(igpu, "framebuffer-slicecount", framebufferPatch.fSliceCount);
+			framebufferPatchFlags.bits.FPFEuCount = WIOKit::getOSDataValue(igpu, "framebuffer-eucount", framebufferPatch.fEuCount);
 
 			if (framebufferPatchFlags.value != 0)
 				hasFramebufferPatch = true;
@@ -1752,14 +1775,34 @@ void IGFX::applyPlatformInformationPatchEx(FramebufferHSW *frame) {
 		frame->camelliaVersion = framebufferPatch.camelliaVersion;
 }
 
+// Broadwell has flags and camelliaVersion but no fSliceCount/fEuCount
+template <>
+void IGFX::applyPlatformInformationPatchEx(FramebufferBDW *frame) {
+	if (framebufferPatchFlags.bits.FPFFlags)
+		frame->flags.value = framebufferPatch.flags.value;
+
+	if (framebufferPatchFlags.bits.FPFCamelliaVersion)
+		frame->camelliaVersion = framebufferPatch.camelliaVersion;
+}
+
+// SKL and newer have flags, camelliaVersion, fSliceCount, and fEuCount
 template <typename T>
 void IGFX::applyPlatformInformationPatchEx(T *frame) {
 	if (framebufferPatchFlags.bits.FPFFlags)
 		frame->flags.value = framebufferPatch.flags.value;
 
-
 	if (framebufferPatchFlags.bits.FPFCamelliaVersion)
 		frame->camelliaVersion = framebufferPatch.camelliaVersion;
+
+	if (framebufferPatchFlags.bits.FPFSliceCount) {
+		frame->fSliceCount = framebufferPatch.fSliceCount;
+		DBGLOG("igfx", "sliceCount: %u", frame->fSliceCount);
+	}
+
+	if (framebufferPatchFlags.bits.FPFEuCount) {
+		frame->fEuCount = framebufferPatch.fEuCount;
+		DBGLOG("igfx", "euCount: %u", frame->fEuCount);
+	}
 }
 
 template <typename T>
