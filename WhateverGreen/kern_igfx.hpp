@@ -326,6 +326,20 @@ private:
 	bool applyFramebufferPatch {false};
 
 	/**
+	 *  GT topology override values for attributes not stored in the framebuffer platform data struct.
+	 *  Non-zero means the override is active. Populated from boot args or device properties.
+	 *  Applied via IOKit provider property injection in wrapAcceleratorStart, and experimentally
+	 *  via unk6[0]/unk6[1] in FramebufferCFL/SKL specializations of applyPlatformInformationPatchEx.
+	 *
+	 *  Boot args  : igfxsubslicecount, igfxdataportcount, igfxsamplercount, igfxl3bankcount
+	 *  Device props: igfx-subslice-count, igfx-data-port-count, igfx-sampler-count, igfx-l3-bank-count
+	 */
+	uint32_t igfxSubsliceCount {0};
+	uint32_t igfxDataPortCount {0};
+	uint32_t igfxSamplerCount  {0};
+	uint32_t igfxL3BankCount   {0};
+
+	/**
 	 *  Perform framebuffer dump to /AppleIntelFramebufferNUM
 	 */
 	bool dumpFramebufferToDisk {false};

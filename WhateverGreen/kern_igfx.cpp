@@ -198,6 +198,35 @@ void IGFX::processKernel(KernelPatcher &patcher, DeviceInfo *info) {
 			}
 		}
 
+		// GT topology override values not present in the framebuffer platform data struct.
+		// Applied via provider property injection and experimental unk6 writes on CFL/SKL.
+		{
+			uint32_t subsliceCount = 0;
+			if (PE_parse_boot_argn("igfxsubslicecount", &subsliceCount, sizeof(subsliceCount)) ||
+				WIOKit::getOSDataValue(info->videoBuiltin, "igfx-subslice-count", subsliceCount)) {
+				igfxSubsliceCount = subsliceCount;
+				DBGLOG("igfx", "subslice count override set to %u", subsliceCount);
+			}
+			uint32_t dataPortCount = 0;
+			if (PE_parse_boot_argn("igfxdataportcount", &dataPortCount, sizeof(dataPortCount)) ||
+				WIOKit::getOSDataValue(info->videoBuiltin, "igfx-data-port-count", dataPortCount)) {
+				igfxDataPortCount = dataPortCount;
+				DBGLOG("igfx", "HDC data port count override set to %u", dataPortCount);
+			}
+			uint32_t samplerCount = 0;
+			if (PE_parse_boot_argn("igfxsamplercount", &samplerCount, sizeof(samplerCount)) ||
+				WIOKit::getOSDataValue(info->videoBuiltin, "igfx-sampler-count", samplerCount)) {
+				igfxSamplerCount = samplerCount;
+				DBGLOG("igfx", "sampler count override set to %u", samplerCount);
+			}
+			uint32_t l3BankCount = 0;
+			if (PE_parse_boot_argn("igfxl3bankcount", &l3BankCount, sizeof(l3BankCount)) ||
+				WIOKit::getOSDataValue(info->videoBuiltin, "igfx-l3-bank-count", l3BankCount)) {
+				igfxL3BankCount = l3BankCount;
+				DBGLOG("igfx", "L3 bank count override set to %u", l3BankCount);
+			}
+		}
+
 #ifdef DEBUG
 		dumpFramebufferToDisk = checkKernelArgument("-igfxdump");
 		dumpPlatformTable = checkKernelArgument("-igfxfbdump");
@@ -1183,6 +1212,25 @@ bool IGFX::wrapAcceleratorStart(IOService *that, IOService *provider) {
 		SYSLOG("igfx", "failed to apply patches for Skylake with KBL kexts");
 	}
 
+	// Inject GT topology overrides as IOKit device properties on the provider.
+	// The accelerator kext may read these during platform initialization.
+	if (callbackIGFX->igfxSubsliceCount || callbackIGFX->igfxDataPortCount ||
+		callbackIGFX->igfxSamplerCount  || callbackIGFX->igfxL3BankCount) {
+		auto setU32Prop = [](IOService *dev, const char *key, uint32_t val) {
+			if (val) {
+				if (auto *n = OSNumber::withNumber(val, 32)) {
+					dev->setProperty(key, n);
+					n->release();
+				}
+			}
+		};
+		setU32Prop(provider, "igfx-subslice-count", callbackIGFX->igfxSubsliceCount);
+		setU32Prop(provider, "igfx-data-port-count", callbackIGFX->igfxDataPortCount);
+		setU32Prop(provider, "igfx-sampler-count",   callbackIGFX->igfxSamplerCount);
+		setU32Prop(provider, "igfx-l3-bank-count",   callbackIGFX->igfxL3BankCount);
+		DBGLOG("igfx", "injected GT topology overrides into accelerator provider properties");
+	}
+
 	bool ret = FunctionCast(wrapAcceleratorStart, callbackIGFX->orgAcceleratorStart)(that, provider);
 
 	if (metalPluginName) {
@@ -1783,6 +1831,69 @@ void IGFX::applyPlatformInformationPatchEx(FramebufferBDW *frame) {
 
 	if (framebufferPatchFlags.bits.FPFCamelliaVersion)
 		frame->camelliaVersion = framebufferPatch.camelliaVersion;
+}
+
+// CFL (and CML which uses the CFL path): same named fields as SKL plus unk6[2] after fEuCount.
+// unk6[0] is hypothesised to be the subslice count field; unk6[1] is hypothesised to be the
+// L3 bank count field. These writes are experimental — if the fields are unused padding they
+// are harmless; if they do map to subslice/L3 topology they correct the GT1F vs GT2 mismatch.
+template <>
+void IGFX::applyPlatformInformationPatchEx(FramebufferCFL *frame) {
+	if (framebufferPatchFlags.bits.FPFFlags)
+		frame->flags.value = framebufferPatch.flags.value;
+
+	if (framebufferPatchFlags.bits.FPFCamelliaVersion)
+		frame->camelliaVersion = framebufferPatch.camelliaVersion;
+
+	if (framebufferPatchFlags.bits.FPFSliceCount) {
+		frame->fSliceCount = framebufferPatch.fSliceCount;
+		DBGLOG("igfx", "CFL sliceCount: %u", frame->fSliceCount);
+	}
+
+	if (framebufferPatchFlags.bits.FPFEuCount) {
+		frame->fEuCount = framebufferPatch.fEuCount;
+		DBGLOG("igfx", "CFL euCount: %u", frame->fEuCount);
+	}
+
+	// Experimental: write subslice count to unk6[0] and L3 bank count to unk6[1].
+	if (igfxSubsliceCount) {
+		frame->unk6[0] = igfxSubsliceCount;
+		DBGLOG("igfx", "CFL unk6[0] <- subslice count %u (experimental)", igfxSubsliceCount);
+	}
+	if (igfxL3BankCount) {
+		frame->unk6[1] = igfxL3BankCount;
+		DBGLOG("igfx", "CFL unk6[1] <- L3 bank count %u (experimental)", igfxL3BankCount);
+	}
+}
+
+// SKL: same unk6[2] layout as CFL.
+template <>
+void IGFX::applyPlatformInformationPatchEx(FramebufferSKL *frame) {
+	if (framebufferPatchFlags.bits.FPFFlags)
+		frame->flags.value = framebufferPatch.flags.value;
+
+	if (framebufferPatchFlags.bits.FPFCamelliaVersion)
+		frame->camelliaVersion = framebufferPatch.camelliaVersion;
+
+	if (framebufferPatchFlags.bits.FPFSliceCount) {
+		frame->fSliceCount = framebufferPatch.fSliceCount;
+		DBGLOG("igfx", "SKL sliceCount: %u", frame->fSliceCount);
+	}
+
+	if (framebufferPatchFlags.bits.FPFEuCount) {
+		frame->fEuCount = framebufferPatch.fEuCount;
+		DBGLOG("igfx", "SKL euCount: %u", frame->fEuCount);
+	}
+
+	// Experimental: write subslice count to unk6[0] and L3 bank count to unk6[1].
+	if (igfxSubsliceCount) {
+		frame->unk6[0] = igfxSubsliceCount;
+		DBGLOG("igfx", "SKL unk6[0] <- subslice count %u (experimental)", igfxSubsliceCount);
+	}
+	if (igfxL3BankCount) {
+		frame->unk6[1] = igfxL3BankCount;
+		DBGLOG("igfx", "SKL unk6[1] <- L3 bank count %u (experimental)", igfxL3BankCount);
+	}
 }
 
 // SKL and newer have flags, camelliaVersion, fSliceCount, and fEuCount
