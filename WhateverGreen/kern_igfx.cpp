@@ -199,7 +199,9 @@ void IGFX::processKernel(KernelPatcher &patcher, DeviceInfo *info) {
 		}
 
 		// GT topology override values not present in the framebuffer platform data struct.
-		// Applied via provider property injection and experimental unk6 writes on CFL/SKL.
+		// Applied via IOKit provider property injection in wrapAcceleratorStart() only.
+		// unk6[] writes were removed because those fields are unknown; writing to them
+		// corrupts the GPU compositor.
 		{
 			uint32_t subsliceCount = 0;
 			if (PE_parse_boot_argn("igfxsubslicecount", &subsliceCount, sizeof(subsliceCount)) ||
@@ -1855,18 +1857,12 @@ void IGFX::applyPlatformInformationPatchEx(FramebufferCFL *frame) {
 		DBGLOG("igfx", "CFL euCount: %u", frame->fEuCount);
 	}
 
-	// Experimental: write subslice count to unk6[0] and L3 bank count to unk6[1].
-	if (igfxSubsliceCount) {
-		frame->unk6[0] = igfxSubsliceCount;
-		DBGLOG("igfx", "CFL unk6[0] <- subslice count %u (experimental)", igfxSubsliceCount);
-	}
-	if (igfxL3BankCount) {
-		frame->unk6[1] = igfxL3BankCount;
-		DBGLOG("igfx", "CFL unk6[1] <- L3 bank count %u (experimental)", igfxL3BankCount);
-	}
+	// NOTE: unk6[0] and unk6[1] are not written — their purpose is unknown and
+	// writing to them can corrupt the GPU compositor. Topology overrides are
+	// applied via IOKit property injection in wrapAcceleratorStart() instead.
 }
 
-// SKL: same unk6[2] layout as CFL.
+// SKL: same structure layout as CFL.
 template <>
 void IGFX::applyPlatformInformationPatchEx(FramebufferSKL *frame) {
 	if (framebufferPatchFlags.bits.FPFFlags)
@@ -1885,15 +1881,7 @@ void IGFX::applyPlatformInformationPatchEx(FramebufferSKL *frame) {
 		DBGLOG("igfx", "SKL euCount: %u", frame->fEuCount);
 	}
 
-	// Experimental: write subslice count to unk6[0] and L3 bank count to unk6[1].
-	if (igfxSubsliceCount) {
-		frame->unk6[0] = igfxSubsliceCount;
-		DBGLOG("igfx", "SKL unk6[0] <- subslice count %u (experimental)", igfxSubsliceCount);
-	}
-	if (igfxL3BankCount) {
-		frame->unk6[1] = igfxL3BankCount;
-		DBGLOG("igfx", "SKL unk6[1] <- L3 bank count %u (experimental)", igfxL3BankCount);
-	}
+	// NOTE: unk6[0] and unk6[1] are not written — same reason as CFL above.
 }
 
 // SKL and newer have flags, camelliaVersion, fSliceCount, and fEuCount
